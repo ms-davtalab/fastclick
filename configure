@@ -1560,7 +1560,7 @@ Optional Features:
   --enable-ip6            include IPv6 elements
   --enable-ipsec          include IP security elements
   --enable-json           include JSON helpers
-  --enable-local          include local elements
+  --disable-local         do not include local elements
   --enable-radio          include radio elements
   --enable-research       include research elements
   --disable-simple        do not include simple versions of other elements
@@ -7537,7 +7537,7 @@ fi
 if test "${enable_local+set}" = set; then :
   enableval=$enable_local;
 else
-  enable_local=NO
+  enable_local=yes
 fi
 test "x$enable_all_elements" = xyes -a \( "x$enable_local" = xNO -o "x$enable_local" = x \) && enable_local=yes
 if test "x$enable_local" = xyes; then

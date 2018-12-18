@@ -1,0 +1,15 @@
+define(
+ $iface0    0,
+ $iface1    1,
+ $queueSize 1024,
+ $burst     32
+);
+
+nicIn0  :: FromDPDKDevice($iface0, BURST $burst);
+nicOut0 :: ToDPDKDevice  ($iface0, IQUEUE $queueSize, BURST $burst);
+
+nicIn1  :: FromDPDKDevice($iface1, BURST $burst);
+nicOut1 :: ToDPDKDevice  ($iface1, IQUEUE $queueSize, BURST $burst);
+
+nicIn0 -> CGN -> nicOut1;
+nicIn1 -> nicOut0;
