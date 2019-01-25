@@ -46,7 +46,7 @@ ip_rw_l[0] -> [0]tcp_rw;    //Rewrite the packet and foward to right interface
 ip_rw_l[1] -> [0]udp_rw;
 
 tcp_rw[0] -> arpq_right[0] -> nicOut1;
-udp_rw[0] -> arpq_right[0] -> nicOut1;
+udp_rw[0] -> SetUDPChecksum() -> SetIPChecksum() -> arpq_right[0] -> nicOut1;
 
 nicIn1 -> class_right;
 
@@ -59,7 +59,7 @@ ip_rw_r[1] -> [1]udp_rw;
 
 
 tcp_rw[1] -> arpq_left[0] -> nicOut0;
-udp_rw[1] -> arpq_left[0] -> nicOut0;
+udp_rw[1] -> SetUDPChecksum()-> SetIPChecksum() -> arpq_left[0] -> nicOut0;
 
 //---------------------icmp error----------------------
 // Rewriting rules for ICMP error packets

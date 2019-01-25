@@ -3,9 +3,10 @@
 #include "elements/ip/iprewriterbase.hh"
 #include "elements/ip/iprwmapping.hh"
 #include <click/sync.hh>
+#include <arpa/inet.h>
 CLICK_DECLS
 
-#define HASH_ENTRIES 16
+#define HASH_ENTRIES 10240
 #ifdef RTE_MACHINE_CPUFLAG_SSE4_2
 #include <rte_hash_crc.h>
 #define DEFAULT_HASH_FUNC       rte_hash_crc
@@ -14,7 +15,29 @@ CLICK_DECLS
 #define DEFAULT_HASH_FUNC       rte_jhash
 #endif
 
+#define IPv4(a,b,c,d) ((uint32_t)(((a) & 0xff) << 24) | \
+                                            (((b) & 0xff) << 16) | \
+                                            (((c) & 0xff) << 8)  | \
+                                            ((d) & 0xff))
+  
 
+struct ipv4_5tuple {
+	in_addr ip_dst;
+	in_addr ip_src;
+	uint16_t port_dst;
+	uint16_t port_src;
+	uint8_t  proto;
+} __attribute__((__packed__));
+
+struct ipv4_and_port {
+	in_addr ip;
+	uint16_t port;
+};
+
+typedef struct rte_hash lookup_struct_t;
+lookup_struct_t *nat_lookup_struct;
+
+struct ipv4_and_port nat_table[HASH_ENTRIES];
 class devika : public IPRewriterBase { public:
 
     class UDPFlow : public IPRewriterFlow { public:
@@ -30,7 +53,7 @@ class devika : public IPRewriterBase { public:
 	    return _tflags > 6;
 	}
 
-	void apply(WritablePacket *p, bool direction, unsigned annos);
+	
 
     };
 
@@ -42,8 +65,6 @@ class devika : public IPRewriterBase { public:
 
     int configure(Vector<String> &, ErrorHandler *) CLICK_COLD;
 
-    IPRewriterEntry *add_flow(int ip_p, const IPFlowID &flowid,
-			      const IPFlowID &rewritten_flowid, int input);
     void destroy_flow(IPRewriterFlow *flow);
     click_jiffies_t best_effort_expiry(const IPRewriterFlow *flow) {
 	return flow->expiry() + udp_flow_timeout(static_cast<const UDPFlow *>(flow)) -
@@ -62,30 +83,6 @@ class devika : public IPRewriterBase { public:
 
     unsigned _annos;
     uint32_t _udp_streaming_timeout;
-
-
-
-
-    int DEBUG=1;
-    struct ipv4_5tuple {
-        in_addr ip_dst;
-        in_addr ip_src;
-        uint16_t port_dst;
-        uint16_t port_src;
-        uint8_t  proto;
-    } __attribute__((__packed__));
-
-    struct ipv4_and_port {
-        in_addr ip;
-        uint16_t port;
-    };
-
-    typedef struct rte_hash lookup_struct_t;
-    lookup_struct_t *inside_lookup_struct;
-    lookup_struct_t *outside_lookup_struct;
-
-    struct ipv4_and_port inside_table[HASH_ENTRIES];
-    struct ipv4_and_port outside_table[HASH_ENTRIES];
     
     int process(int port, Packet *p_in);
 

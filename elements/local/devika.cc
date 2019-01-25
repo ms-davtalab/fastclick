@@ -9,45 +9,7 @@
 #include <rte_hash.h>
 CLICK_DECLS
 
-void
-devika::UDPFlow::apply(WritablePacket *p, bool direction, unsigned annos)
-{
-    assert(p->has_network_header());
-    click_ip *iph = p->ip_header();
 
-    // IP header
-    const IPFlowID &revflow = _e[!direction].flowid();
-    iph->ip_src = revflow.daddr();
-    iph->ip_dst = revflow.saddr();
-    if (annos & 1)
-	p->set_dst_ip_anno(revflow.saddr());
-    if (direction && (annos & 2))
-	p->set_anno_u8(annos >> 2, _reply_anno);
-    update_csum(&iph->ip_sum, direction, _ip_csum_delta);
-
-    // end if not first fragment
-    if (!IP_FIRSTFRAG(iph))
-	return;
-
-    // TCP/UDP header
-    click_udp *udph = p->udp_header();
-    udph->uh_sport = revflow.dport(); // TCP ports in the same place
-    udph->uh_dport = revflow.sport();
-    if (iph->ip_p == IP_PROTO_TCP) {
-	if (p->transport_length() >= 18)
-	    update_csum(&reinterpret_cast<click_tcp *>(udph)->th_sum, direction, _udp_csum_delta);
-    } else if (iph->ip_p == IP_PROTO_UDP) {
-	if (p->transport_length() >= 8 && udph->uh_sum)
-	    // 0 checksum is no checksum
-	    update_csum(&udph->uh_sum, direction, _udp_csum_delta);
-    }
-
-    // track connection state
-    if (direction)
-	_tflags |= 1;
-    if (_tflags < 6)
-	_tflags += 2;
-}
 
 devika::devika() : _allocator()
 {
@@ -113,46 +75,27 @@ devika::configure(Vector<String> &conf, ErrorHandler *errh)
         .hash_func_init_val = 0,
     };*/
 
-    ipv4_hash_params.name = "inside_hash";
+    ipv4_hash_params.name = "hash_table";
     ipv4_hash_params.entries = HASH_ENTRIES;
     ipv4_hash_params.key_len = sizeof(struct ipv4_5tuple);
     ipv4_hash_params.hash_func = DEFAULT_HASH_FUNC;
     ipv4_hash_params.hash_func_init_val = 0;
     ipv4_hash_params.socket_id = 0;
-    inside_lookup_struct = rte_hash_create(&ipv4_hash_params);
-    if (inside_lookup_struct == NULL)
-        rte_exit(EXIT_FAILURE, "Unablea to create the inside hash on sockets %d\n", 1);
-
-    ipv4_hash_params.name = "outside_hash";
-    /*outside_lookup_struct = rte_hash_create(&ipv4_hash_params);
-    if (outside_lookup_struct == NULL)
-        rte_exit(EXIT_FAILURE, "Unablea to create the outside hash on sockets %d\n", 1);*/
+    nat_lookup_struct = rte_hash_create(&ipv4_hash_params);
+    if (nat_lookup_struct == NULL)
+        rte_exit(EXIT_FAILURE, "Unablea to create the hash table on sockets %d\n", 1);
+    printf("%s\n", "create hash");
     //end setup hash
     return IPRewriterBase::configure(conf, errh);
 }
 
-IPRewriterEntry *
-devika::add_flow(int ip_p, const IPFlowID &flowid,
-		      const IPFlowID &rewritten_flowid, int input)
-{
-    void *data = _allocator->allocate();
-    if (!data)
-        return 0;
-
-    UDPFlow *flow = new(data) UDPFlow
-	(&_input_specs[input], flowid, rewritten_flowid, ip_p,
-	 !!_timeouts[click_current_cpu_id()][1], click_jiffies() +
-         relevant_timeout(_timeouts[click_current_cpu_id()]));
-
-    return store_flow(flow, input, _map[click_current_cpu_id()]);
-}
 
 
+
+         
 int
 devika::process(int port, Packet *p_in)
 {
-    printf("%s\n", "hello from cgn:D");
-
     WritablePacket *p = p_in->uniqueify();
     if (!p) {
         return -2;
@@ -183,86 +126,67 @@ devika::process(int port, Packet *p_in)
     //}
     
     int ret;
-    if(port==0){ /*do nat (from inside to outside)*/
-        ret = rte_hash_lookup(inside_lookup_struct, (const void *)&myflow);
-        if(ret<0){ /*first time to NAT*/
+    if(port==0){ /*do NAT (from inside to outside)*/
+        ret = rte_hash_lookup(nat_lookup_struct, (const void *)&myflow);
+        if(ret<0){ /*See this flow for the first time*/
             /* TODO: allocate ip & port from pool*/
             in_addr public_ip;
-            public_ip.s_addr = 3232236289; //192.168.3.1
-            uint16_t public_port = udph->uh_sport;
+            public_ip.s_addr = htonl(IPv4(192, 168, 3, 1));
+            uint16_t public_port = udph->uh_sport; //htons()
 
-            ret = rte_hash_add_key (inside_lookup_struct,
+            /*Add this flow to NAT table*/
+            ret = rte_hash_add_key (nat_lookup_struct, 
                         (void *) &myflow);
             if (ret < 0) {
                     rte_exit(EXIT_FAILURE, "Unable to add entry (inside)\n");
             }
-            inside_table[ret].ip = public_ip;
-            inside_table[ret].port = public_port;
-            
-            if(DEBUG){
-                printf("FLOW>New flow add to inside db.@%d\n",ret);
-            }
-
-            
+            nat_table[ret].ip = public_ip;
+            nat_table[ret].port = public_port;
+                       
             myflow.ip_src = iph->ip_dst;
             myflow.ip_dst = public_ip;
             myflow.port_src = udph->uh_dport;
             myflow.port_dst = public_port;
 
-            ret = rte_hash_add_key (outside_lookup_struct,
+            ret = rte_hash_add_key (nat_lookup_struct,
                         (void *) &myflow);
             if (ret < 0) {
                     rte_exit(EXIT_FAILURE, "Unable to add entry (outside)\n");
             }
-            if(DEBUG){
-                printf("FLOW>New flow add to outside db.@%d\n",ret);
-            }
-            outside_table[ret].ip = iph->ip_src;
-            outside_table[ret].port = udph->uh_sport;
+            
+            nat_table[ret].ip = iph->ip_src;
+            nat_table[ret].port = udph->uh_sport;
 
             /*change packet field*/
             iph->ip_src = public_ip;
             udph->uh_sport = public_port;
-            iph->ip_sum = 0;
         }
+        else{
+            /*change packet field*/
+	    iph->ip_src = nat_table[ret].ip;
+            udph->uh_sport = nat_table[ret].port;
+        }
+        
+    	return 0;
     }
     else{/*undo nat (from outside to inside)*/
-
-    }
-    printf("%s\n", "return from cgn:D");
-    return 0;
-    /* end hash  */
-
-    IPFlowID flowid(p);
-    IPRewriterEntry *m = _map[click_current_cpu_id()].get(flowid);
-
-    if (!m) {			// create new mapping
-        IPRewriterInput &is = _input_specs.unchecked_at(port);
-        IPFlowID rewritten_flowid = IPFlowID::uninitialized_t();
-
-        int result = is.rewrite_flowid(flowid, rewritten_flowid, p);
-        if (result == rw_addmap) {
-            m = devika::add_flow(ip_p, flowid, rewritten_flowid, port);
+	ret = rte_hash_lookup(nat_lookup_struct, (const void *)&myflow);
+        if(ret<0){ /*See this flow for the first time so drop it */
+        	/*TODO: How to realy drop a packet?*/
+        	printf("%s\n", "can not find flow");
+        	return -1;
+        }
+        else{
+            /*change packet field*/
+            
+            iph->ip_dst = nat_table[ret].ip;
+            udph->uh_dport = nat_table[ret].port;
+            p->set_dst_ip_anno(nat_table[ret].ip);
+        
         }
 
-        if (!m) {
-            return result;
-        } else if (_annos & 2) {
-            m->flow()->set_reply_anno(p->anno_u8(_annos >> 2));
-        }
+    	return 1;
     }
-
-    UDPFlow *mf = static_cast<UDPFlow *>(m->flow());
-    mf->apply(p, m->direction(), _annos);
-
-    click_jiffies_t now_j = click_jiffies();
-    if (_timeouts[click_current_cpu_id()][1])
-	mf->change_expiry(_heap[click_current_cpu_id()], true, now_j + _timeouts[click_current_cpu_id()][1]);
-    else
-	mf->change_expiry(_heap[click_current_cpu_id()], false, now_j + udp_flow_timeout(mf));
-
-    printf("%d\n", m->output());
-    return m->output();
 }
 
 void
@@ -274,7 +198,7 @@ devika::push(int port, Packet *p)
             p->kill();
         return;
     }
-
+    
     checked_output_push(output_port, p);
 }
 
