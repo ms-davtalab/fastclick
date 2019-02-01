@@ -35,9 +35,7 @@ struct ipv4_and_port {
 };
 
 typedef struct rte_hash lookup_struct_t;
-lookup_struct_t *nat_lookup_struct;
 
-struct ipv4_and_port nat_table[HASH_ENTRIES];
 class devika : public IPRewriterBase { public:
 
     class UDPFlow : public IPRewriterFlow { public:

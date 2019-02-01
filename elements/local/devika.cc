@@ -9,7 +9,9 @@
 #include <rte_hash.h>
 CLICK_DECLS
 
+static lookup_struct_t *nat_lookup_struct;
 
+static struct ipv4_and_port nat_table[HASH_ENTRIES];
 
 devika::devika() : _allocator()
 {
